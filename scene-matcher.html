@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Scene Matcher — Image + Script + Voiceover</title>
+<style>
+:root{--bg:#f7f6f3;--card:#fff;--text:#1a1a1a;--sub:#666;--accent:#d4622a;--border:#e3e0da;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#161513;--card:#211f1c;--text:#eee;--sub:#999;--border:#3a3733;}}
+:root[data-theme="dark"]{--bg:#161513;--card:#211f1c;--text:#eee;--sub:#999;--border:#3a3733;}
+*{box-sizing:border-box}
+html{scroll-padding-top:env(safe-area-inset-top,0px);height:100%}
+body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,Segoe UI,Roboto,sans-serif;padding:16px;min-height:100%}
+h1{font-size:18px;margin:0 0 4px}
+p.sub{color:var(--sub);font-size:13px;margin:0 0 16px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:12px}
+label{display:block;font-size:13px;font-weight:600;margin-bottom:6px}
+input[type=file],textarea{width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--text);font-size:14px}
+textarea{min-height:110px;resize:vertical}
+button{background:var(--accent);color:#fff;border:none;border-radius:10px;padding:12px 16px;font-size:15px;font-weight:600;width:100%;margin-top:6px}
+button:disabled{opacity:.5}
+button.secondary{background:transparent;color:var(--accent);border:1px solid var(--accent)}
+.row{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--sub);margin-top:6px}
+.scene{display:flex;gap:10px;align-items:center;border-top:1px solid var(--border);padding:8px 0}
+.scene img{width:56px;height:56px;object-fit:cover;border-radius:6px;flex-shrink:0}
+.scene .txt{flex:1;font-size:12px;color:var(--sub);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.scene input[type=number]{width:60px;padding:4px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--text)}
+#status{font-size:13px;color:var(--sub);margin-top:8px;white-space:pre-wrap}
+#preview{width:100%;border-radius:10px;margin-top:10px;display:none}
+progress{width:100%;height:8px;margin-top:8px}
+a.dl{display:block;text-align:center;margin-top:8px;color:var(--accent);font-weight:600;text-decoration:none}
+</style>
+</head>
+<body>
+<h1>Scene Matcher</h1>
+<p class="sub">Images + script + voiceover upload karo — tool har scene ke image ko script ke hisab se voiceover ke saath sync kar dega.</p>
+
+<div class="card">
+<label>1. Images (ordered — jis order mein select karo wahi scene order hogi)</label>
+<input type="file" id="imgInput" accept="image/*" multiple>
+<div class="row" id="imgCount">Koi image nahi</div>
+</div>
+
+<div class="card">
+<label>2. Voiceover audio</label>
+<input type="file" id="audInput" accept="audio/*">
+<div class="row" id="audInfo">Koi audio nahi</div>
+</div>
+
+<div class="card">
+<label>3. Script — har scene ek nayi line par (image jitni lines utni hi honi chahiye)</label>
+<textarea id="script" placeholder="Scene 1 ka text...&#10;Scene 2 ka text...&#10;Scene 3 ka text..."></textarea>
+<div class="row"><input type="checkbox" id="fade" checked> Crossfade transition scenes ke beech</div>
+<button class="secondary" id="matchBtn">Scenes Match Karo</button>
+<div id="status"></div>
+<div id="sceneList"></div>
+</div>
+
+<div class="card" id="renderCard" style="display:none">
+<button id="renderBtn">🎬 Video Render Karo</button>
+<progress id="prog" value="0" max="100" style="display:none"></progress>
+<video id="preview" controls></video>
+<a class="dl" id="dlLink" style="display:none">⬇️ Video Download Karo</a>
+</div>
+
+<canvas id="cv" width="1280" height="720" style="display:none"></canvas>
+
+<script>
+let images=[], audioFile=null, audioDuration=0, scenes=[];
+const imgInput=document.getElementById('imgInput'), audInput=document.getElementById('audInput');
+const status=document.getElementById('status'), sceneList=document.getElementById('sceneList');
+const cv=document.getElementById('cv'), ctx=cv.getContext('2d');
+
+imgInput.onchange=e=>{
+  images=Array.from(e.target.files);
+  document.getElementById('imgCount').textContent=images.length+' images select hui';
+};
+
+audInput.onchange=e=>{
+  audioFile=e.target.files[0];
+  const tmp=new Audio(URL.createObjectURL(audioFile));
+  tmp.onloadedmetadata=()=>{
+    audioDuration=tmp.duration;
+    document.getElementById('audInfo').textContent='Duration: '+audioDuration.toFixed(1)+'s';
+  };
+};
+
+document.getElementById('matchBtn').onclick=()=>{
+  const lines=document.getElementById('script').value.split('\n').map(s=>s.trim()).filter(Boolean);
+  if(!images.length||!audioFile||!lines.length){status.textContent='⚠️ Images, audio, aur script teeno do pehle.';return;}
+  if(!audioDuration){status.textContent='⚠️ Audio load hone do, thoda ruk kar dobara try karo.';return;}
+  const n=Math.min(images.length,lines.length);
+  if(images.length!==lines.length) status.textContent=`⚠️ ${images.length} images vs ${lines.length} lines — pehli ${n} match ki.`;
+  else status.textContent='✅ '+n+' scenes match ho gaye.';
+  const wordCounts=lines.slice(0,n).map(l=>l.split(/\s+/).length);
+  const totalWords=wordCounts.reduce((a,b)=>a+b,0)||n;
+  scenes=[];
+  for(let i=0;i<n;i++){
+    const dur=totalWords?audioDuration*(wordCounts[i]/totalWords):audioDuration/n;
+    scenes.push({file:images[i],text:lines[i],duration:+dur.toFixed(2),url:URL.createObjectURL(images[i])});
+  }
+  renderSceneList();
+  document.getElementById('renderCard').style.display='block';
+};
+
+function renderSceneList(){
+  sceneList.innerHTML='';
+  scenes.forEach((s,i)=>{
+    const d=document.createElement('div');d.className='scene';
+    d.innerHTML=`<img src="${s.url}"><div class="txt">${s.text}</div><input type="number" step="0.1" value="${s.duration}" data-i="${i}">`;
+    sceneList.appendChild(d);
+  });
+  sceneList.querySelectorAll('input[type=number]').forEach(inp=>{
+    inp.oninput=()=>{scenes[inp.dataset.i].duration=parseFloat(inp.value)||0.1;};
+  });
+}
+
+document.getElementById('renderBtn').onclick=async()=>{
+  const btn=document.getElementById('renderBtn'), prog=document.getElementById('prog');
+  btn.disabled=true;prog.style.display='block';status.textContent='Images load ho rahi hain...';
+  const loaded=await Promise.all(scenes.map(s=>new Promise(res=>{const im=new Image();im.onload=()=>res(im);im.src=s.url;})));
+
+  const audioEl=new Audio(URL.createObjectURL(audioFile));
+  audioEl.crossOrigin='anonymous';
+  const actx=new (window.AudioContext||window.webkitAudioContext)();
+  const src=actx.createMediaElementSource(audioEl);
+  const dest=actx.createMediaStreamDestination();
+  src.connect(dest); // not connected to actx.destination -> silent locally, still in recording
+
+  const canvasStream=cv.captureStream(30);
+  const combined=new MediaStream([...canvasStream.getVideoTracks(),...dest.stream.getAudioTracks()]);
+  let mime='video/webm;codecs=vp9,opus';
+  if(!MediaRecorder.isTypeSupported(mime)) mime='video/webm';
+  const rec=new MediaRecorder(combined,{mimeType:mime});
+  const chunks=[];
+  rec.ondataavailable=e=>{if(e.data.size)chunks.push(e.data);};
+  rec.onstop=()=>{
+    const blob=new Blob(chunks,{type:'video/webm'});
+    const url=URL.createObjectURL(blob);
+    const pv=document.getElementById('preview');
+    pv.src=url;pv.style.display='block';
+    const dl=document.getElementById('dlLink');
+    dl.href=url;dl.download='scene-video.webm';dl.style.display='block';
+    status.textContent='✅ Video ready! Neeche preview aur download link hai.';
+    btn.disabled=false;prog.style.display='none';
+  };
+
+  const starts=[0];
+  scenes.forEach((s,i)=>{if(i>0)starts.push(starts[i-1]+scenes[i-1].duration);});
+  const fadeOn=document.getElementById('fade').checked;
+  const fadeSec=0.4;
+
+  function draw(){
+    const t=audioEl.currentTime;
+    let idx=scenes.findIndex((s,i)=>t>=starts[i]&&t<starts[i]+s.duration);
+    if(idx===-1) idx=scenes.length-1;
+    ctx.fillStyle='#000';ctx.fillRect(0,0,cv.width,cv.height);
+    drawCover(loaded[idx]);
+    if(fadeOn&&idx<scenes.length-1){
+      const into=t-starts[idx], remain=scenes[idx].duration-into;
+      if(remain<fadeSec){
+        ctx.globalAlpha=1-(remain/fadeSec);
+        drawCover(loaded[idx+1]);
+        ctx.globalAlpha=1;
+      }
+    }
+    if(!audioEl.ended) requestAnimationFrame(draw);
+  }
+  function drawCover(im){
+    const s=Math.max(cv.width/im.width,cv.height/im.height);
+    const w=im.width*s,h=im.height*s;
+    ctx.drawImage(im,(cv.width-w)/2,(cv.height-h)/2,w,h);
+  }
+
+  audioEl.onended=()=>setTimeout(()=>rec.stop(),200);
+  status.textContent='Recording ho raha hai — is tab ko khula rakho...';
+  rec.start();
+  await audioEl.play();
+  draw();
+};
+</script>
+</body>
+</html>
